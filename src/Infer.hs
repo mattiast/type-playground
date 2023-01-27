@@ -3,7 +3,7 @@ module Infer where
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Data.List ( foldl', intercalate, nub )
-import Control.Monad.Trans.State (  runState, State )
+import Control.Monad.Trans.State (  State, evalState )
 import Control.Applicative ( Alternative((<|>), many) )
 import qualified Data.Attoparsec.ByteString.Char8 as A
 import Data.Attoparsec.ByteString.Char8(Parser)
@@ -11,6 +11,7 @@ import qualified Data.ByteString.Char8 as B
 import Control.Monad (foldM)
 import Control.Monad.Trans.Maybe (MaybeT (runMaybeT))
 import Control.Monad.State.Class (MonadState(..))
+import Data.Function ((&))
 
 data Exp = EVar String
          | EApp Exp [Exp]
@@ -50,11 +51,11 @@ instance Types Type where
     apply _ TBool = TBool
 
 instance Types Scheme where
-    ftv (Scheme vars t) = (ftv t) `S.difference` (S.fromList vars)
+    ftv (Scheme vars t) = ftv t `S.difference` S.fromList vars
     apply s (Scheme vars t) = Scheme vars (apply (foldr M.delete s vars) t)
 
 instance Types a => Types [a] where
-    ftv l = foldr S.union S.empty (map ftv l)
+    ftv = foldr (S.union . ftv) S.empty
     apply s = map (apply s)
     
 type Subst = M.Map String Type
@@ -75,7 +76,7 @@ instance Types TypeEnv where
 
 generalize :: TypeEnv -> Type -> Scheme
 generalize env t = Scheme vars t where
-    vars = S.toList ((ftv t) `S.difference` (ftv env))
+    vars = S.toList (ftv t `S.difference` ftv env)
 
 newtype TIState = TIState Int
 
@@ -108,7 +109,7 @@ mgu (TPair l r) (TPair l' r') = do
 mgu (TList t1) (TList t2) = mgu t1 t2
 mgu TInt TInt = return nullSubst
 mgu TBool TBool = return nullSubst
-mgu _ _ = fail $ "Do not unify: t1 t2"
+mgu _ _ = fail "Do not unify: t1 t2"
 
 varBind :: String -> Type -> Maybe Subst
 varBind u t | t == TVar u = return nullSubst
@@ -124,7 +125,7 @@ ti (TypeEnv env) (EVar n) = case M.lookup n env of
 ti env (EAbs ns e) = do
         tvs <- mapM (\_ -> newTyVar "a") ns -- these are the parameter types in lambda
         let TypeEnv env' = foldl' remove env ns
-            env'' = TypeEnv (env' `M.union` (M.fromList $ zip ns [ Scheme [] tv | tv <- tvs ]))
+            env'' = TypeEnv (env' `M.union` M.fromList (zip ns [ Scheme [] tv | tv <- tvs ]))
         (s1, t1) <- ti env'' e
         return (s1, TFun (apply s1 tvs) t1)
 ti env (EApp ef eargs) = let
@@ -146,9 +147,11 @@ ti env (ELet x e1 e2) = do
         (s2, t2) <- ti env'' e2
         return (s2 `composeSubst` s1, t2)
 
-infer :: TypeEnv -> Exp -> Type
-infer env e = let (Just (_, t), _) = runState (runMaybeT $ ti env e) (TIState 0)
-              in t
+infer :: TypeEnv -> Exp -> Maybe Type
+infer env e = 
+    evalState (runMaybeT $ ti env e) (TIState 0)
+    & fmap snd
+              
 
 myEnv :: TypeEnv
 myEnv = let a = TVar "a"
@@ -205,7 +208,7 @@ parseExpr = parseLet <|> parseFun <|> parseSimple where
     parseSimple = do
         f <- parseFactor
         calls <- many (A.char '(' *> (parseExpr `A.sepBy` A.string ", ") <* A.char ')')
-        return $ foldl (\e c -> EApp e c) f calls
+        return $ foldl EApp f calls
 
 isSimple :: Type -> Bool
 isSimple (TFun _ _) = False
@@ -216,7 +219,7 @@ generalizeWithABC t = let
     fvord :: Type -> [String]
     fvord (TVar n) = [n]
     fvord (TFun ts t2) = nub (concatMap fvord (ts ++ [t2]))
-    fvord (TList t) = fvord t
+    fvord (TList t1) = fvord t1
     fvord (TPair t1 t2) = nub (fvord t1 ++ fvord t2)
     fvord _ = []
     vars = nub $ fvord t
@@ -242,12 +245,12 @@ renderScheme (Scheme vars t) = let
                 _ -> "forall[" ++ unwords vars ++ "] "
     in foral ++ renderType t
 
-myParse :: B.ByteString -> Exp
-myParse str = let Right e = A.parseOnly (parseExpr <* A.endOfInput  ) str
-              in e
+myParse :: B.ByteString -> Either String Exp
+myParse = A.parseOnly (parseExpr <* A.endOfInput)
 
 main :: IO ()
 main = do
     line <- B.getLine
-    let e = myParse line
-    putStrLn $ renderScheme $ generalizeWithABC $ infer myEnv e
+    Right e <- return $ myParse line
+    Just typ <- return $ infer myEnv e
+    putStrLn $ renderScheme $ generalizeWithABC typ
