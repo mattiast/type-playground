@@ -3,13 +3,14 @@ module Infer where
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Data.List ( foldl', intercalate, nub )
-import Control.Monad.Trans.State ( get, put, runState, State )
+import Control.Monad.Trans.State (  runState, State )
 import Control.Applicative ( Alternative((<|>), many) )
 import qualified Data.Attoparsec.ByteString.Char8 as A
 import Data.Attoparsec.ByteString.Char8(Parser)
 import qualified Data.ByteString.Char8 as B
 import Control.Monad (foldM)
-import Data.Maybe (fromJust)
+import Control.Monad.Trans.Maybe (MaybeT (runMaybeT))
+import Control.Monad.State.Class (MonadState(..))
 
 data Exp = EVar String
          | EApp Exp [Exp]
@@ -78,7 +79,7 @@ generalize env t = Scheme vars t where
 
 newtype TIState = TIState Int
 
-type TI a = State TIState a
+type TI a = MaybeT (State TIState) a
 
 newTyVar :: String -> TI Type
 newTyVar prefix = do
@@ -116,7 +117,7 @@ varBind u t | t == TVar u = return nullSubst
 
 ti :: TypeEnv -> Exp -> TI (Subst, Type)
 ti (TypeEnv env) (EVar n) = case M.lookup n env of
-                                Nothing -> error "variable not bound"
+                                Nothing -> fail "variable not bound"
                                 Just sigma -> do
                                     t <- instantiate sigma
                                     return (nullSubst, t)
@@ -135,7 +136,7 @@ ti env (EApp ef eargs) = let
     in do (s1, ts) <- go eargs
           (s2, t1) <- ti (apply s1 env) ef
           tv <- newTyVar "a" -- type of the return value
-          let s3 = fromJust $ mgu t1 (TFun (apply s2 ts) tv)
+          Just s3 <- return $ mgu t1 (TFun (apply s2 ts) tv)
           return (s3 `composeSubst` s2 `composeSubst` s1, apply s3 tv)
 ti env (ELet x e1 e2) = do
         (s1, t1) <- ti env e1
@@ -146,7 +147,7 @@ ti env (ELet x e1 e2) = do
         return (s2 `composeSubst` s1, t2)
 
 infer :: TypeEnv -> Exp -> Type
-infer env e = let ((_, t), _) = runState (ti env e) (TIState 0)
+infer env e = let (Just (_, t), _) = runState (runMaybeT $ ti env e) (TIState 0)
               in t
 
 myEnv :: TypeEnv
