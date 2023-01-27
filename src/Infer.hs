@@ -1,5 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
-module Infer where
+module Infer(
+    infer,
+    myParse,
+    myEnv,
+    generalizeWithABC,
+    renderScheme,
+    main,
+) where
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Data.List ( foldl', intercalate, nub )
