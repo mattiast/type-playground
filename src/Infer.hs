@@ -25,31 +25,6 @@ data Type = TVar String
           | TPair Type Type
           deriving (Eq, Ord, Show)
 
-parseExpr :: Parser Exp
-parseExpr = parseLet <|> parseFun <|> parseSimple where
-    parseLet = do
-        _ <- A.string "let "
-        var <- parseId
-        _ <- A.string " = "
-        e1 <- parseExpr
-        _ <- A.string " in "
-        e2 <- parseExpr
-        return (ELet var e1 e2)
-    parseId :: Parser String
-    parseId = B.unpack <$> A.takeWhile1 (A.inClass "_a-zA-Z0-9")
-    parseFun = do
-        _ <- A.string "fun "
-        alist <- parseId `A.sepBy` A.char ' '
-        _ <- A.string " -> "
-        e <- parseExpr
-        return (EAbs alist e)
-    parseFactor = (A.char '(' *> parseExpr <* A.char ')')
-                 <|> (EVar <$> parseId)
-    parseSimple = do
-        f <- parseFactor
-        calls <- many (A.char '(' *> (parseExpr `A.sepBy` A.string ", ") <* A.char ')')
-        return $ foldl (\e c -> EApp e c) f calls
-
 data Scheme = Scheme [String] Type
 
 class Types a where
@@ -170,6 +145,10 @@ ti env (ELet x e1 e2) = do
         (s2, t2) <- ti env'' e2
         return (s2 `composeSubst` s1, t2)
 
+infer :: TypeEnv -> Exp -> Type
+infer env e = let ((_, t), _) = runState (ti env e) (TIState 0)
+              in t
+
 myEnv :: TypeEnv
 myEnv = let a = TVar "a"
             b = TVar "b"
@@ -202,9 +181,30 @@ myEnv = let a = TVar "a"
     , ("choose_curry", Scheme ["a"] (TFun [a] (TFun [a] a)))
   ]
 
-infer :: TypeEnv -> Exp -> Type
-infer env e = let ((_, t), _) = runState (ti env e) (TIState 0)
-              in t
+parseExpr :: Parser Exp
+parseExpr = parseLet <|> parseFun <|> parseSimple where
+    parseLet = do
+        _ <- A.string "let "
+        var <- parseId
+        _ <- A.string " = "
+        e1 <- parseExpr
+        _ <- A.string " in "
+        e2 <- parseExpr
+        return (ELet var e1 e2)
+    parseId :: Parser String
+    parseId = B.unpack <$> A.takeWhile1 (A.inClass "_a-zA-Z0-9")
+    parseFun = do
+        _ <- A.string "fun "
+        alist <- parseId `A.sepBy` A.char ' '
+        _ <- A.string " -> "
+        e <- parseExpr
+        return (EAbs alist e)
+    parseFactor = (A.char '(' *> parseExpr <* A.char ')')
+                 <|> (EVar <$> parseId)
+    parseSimple = do
+        f <- parseFactor
+        calls <- many (A.char '(' *> (parseExpr `A.sepBy` A.string ", ") <* A.char ')')
+        return $ foldl (\e c -> EApp e c) f calls
 
 isSimple :: Type -> Bool
 isSimple (TFun _ _) = False
@@ -248,5 +248,5 @@ myParse str = let Right e = A.parseOnly (parseExpr <* A.endOfInput  ) str
 main :: IO ()
 main = do
     line <- B.getLine
-    let Right e = A.parseOnly (parseExpr <* A.endOfInput  ) line
+    let e = myParse line
     putStrLn $ renderScheme $ generalizeWithABC $ infer myEnv e
