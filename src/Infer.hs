@@ -27,11 +27,8 @@ data Exp = EVar String
          deriving (Eq, Ord, Show)
 
 data Type = TVar String
-          | TInt
-          | TBool
           | TFun [Type] Type
-          | TList Type
-          | TPair Type Type
+          | TApp String [Type]
           deriving (Eq, Ord, Show)
 
 data Scheme = Scheme [String] Type
@@ -42,27 +39,21 @@ class Types a where
 
 instance Types Type where
     ftv (TVar n) = S.singleton n
-    ftv TInt = S.empty
-    ftv TBool = S.empty
     ftv (TFun t1 t2) = ftv t1 `S.union` ftv t2
-    ftv (TList t) = ftv t
-    ftv (TPair t1 t2) = ftv t1 `S.union` ftv t2
+    ftv (TApp _c ts) = S.unions (map ftv ts)
 
     apply s (TVar n) = case M.lookup n s of
                            Nothing -> TVar n
                            Just t -> t
     apply s (TFun t1 t2) = TFun (apply s t1) (apply s t2)
-    apply s (TList t) = TList (apply s t)
-    apply s (TPair t1 t2) = TPair (apply s t1) (apply s t2)
-    apply _ TInt = TInt
-    apply _ TBool = TBool
+    apply s (TApp c ts) = TApp c (map (apply s) ts)
 
 instance Types Scheme where
     ftv (Scheme vars t) = ftv t `S.difference` S.fromList vars
     apply s (Scheme vars t) = Scheme vars (apply (foldr M.delete s vars) t)
 
 instance Types a => Types [a] where
-    ftv = foldr (S.union . ftv) S.empty
+    ftv = S.unions . map ftv
     apply s = map (apply s)
     
 type Subst = M.Map String Type
@@ -109,13 +100,11 @@ mgu (TFun l r) (TFun l' r') | length l == length l' = let
         s1 <- mgu (apply sub t1) (apply sub t2)
         return $ s1 `composeSubst` sub
     in foldM f nullSubst $ zip (r:l) (r':l')
-mgu (TPair l r) (TPair l' r') = do
-        s1 <- mgu l l'
-        s2 <- mgu (apply s1 r) (apply s1 r')
-        return $ s2 `composeSubst` s1
-mgu (TList t1) (TList t2) = mgu t1 t2
-mgu TInt TInt = return nullSubst
-mgu TBool TBool = return nullSubst
+mgu (TApp c1 ts1) (TApp c2 ts2) | c1 == c2 && length ts1 == length ts2 = let
+    f sub (t1, t2) = do
+        s1 <- mgu (apply sub t1) (apply sub t2)
+        return $ s1 `composeSubst` sub
+    in foldM f nullSubst $ zip ts1 ts2
 mgu _ _ = fail "Do not unify: t1 t2"
 
 varBind :: String -> Type -> Maybe Subst
@@ -163,27 +152,31 @@ infer env e =
 myEnv :: TypeEnv
 myEnv = let a = TVar "a"
             b = TVar "b"
+            tList t = TApp "list" [t]
+            tInt = TApp "int" []
+            tBool = TApp "bool" []
+            tPair t1 t2 = TApp "pair" [t1,t2]
         in TypeEnv $ M.fromList [
-      ("head", Scheme ["a"] (TFun [TList a] a))
-    , ("tail", Scheme ["a"] (TFun [TList a] (TList a)))
-    , ("nil", Scheme ["a"] (TList a))
-    , ("cons", Scheme ["a"] (TFun [a, TList a] (TList a)))
-    , ("cons_curry", Scheme ["a"] (TFun [a] (TFun [TList a] (TList a))))
-    , ("map", Scheme ["a","b"] (TFun [TFun [a] b, TList a] (TList b)))
-    , ("map_curry", Scheme ["a", "b"] (TFun [TFun [a] b] (TFun [TList a] (TList b))))
-    , ("one", Scheme [] TInt)
-    , ("zero", Scheme [] TInt)
-    , ("succ", Scheme [] (TFun [TInt] TInt))
-    , ("plus", Scheme [] (TFun [TInt, TInt] TInt))
-    , ("eq", Scheme ["a"] (TFun [a, a] TBool))
-    , ("eq_curry", Scheme ["a"] (TFun [a] (TFun [a] TBool)))
-    , ("not", Scheme [] (TFun [TBool] TBool))
-    , ("true", Scheme [] TBool)
-    , ("false", Scheme [] TBool)
-    , ("pair", Scheme ["a", "b"] (TFun [a, b] (TPair a b)))
-    , ("pair_curry", Scheme ["a", "b"] (TFun [a] (TFun [b] (TPair a b))))
-    , ("first", Scheme ["a", "b"] (TFun [TPair a b] a))
-    , ("second", Scheme ["a", "b"] (TFun [TPair a b] b))
+      ("head", Scheme ["a"] (TFun [tList a] a))
+    , ("tail", Scheme ["a"] (TFun [tList a] (tList a)))
+    , ("nil", Scheme ["a"] (tList a))
+    , ("cons", Scheme ["a"] (TFun [a, tList a] (tList a)))
+    , ("cons_curry", Scheme ["a"] (TFun [a] (TFun [tList a] (tList a))))
+    , ("map", Scheme ["a","b"] (TFun [TFun [a] b, tList a] (tList b)))
+    , ("map_curry", Scheme ["a", "b"] (TFun [TFun [a] b] (TFun [tList a] (tList b))))
+    , ("one", Scheme [] tInt)
+    , ("zero", Scheme [] tInt)
+    , ("succ", Scheme [] (TFun [tInt] tInt))
+    , ("plus", Scheme [] (TFun [tInt, tInt] tInt))
+    , ("eq", Scheme ["a"] (TFun [a, a] tBool))
+    , ("eq_curry", Scheme ["a"] (TFun [a] (TFun [a] tBool)))
+    , ("not", Scheme [] (TFun [tBool] tBool))
+    , ("true", Scheme [] tBool)
+    , ("false", Scheme [] tBool)
+    , ("pair", Scheme ["a", "b"] (TFun [a, b] (tPair a b)))
+    , ("pair_curry", Scheme ["a", "b"] (TFun [a] (TFun [b] (tPair a b))))
+    , ("first", Scheme ["a", "b"] (TFun [tPair a b] a))
+    , ("second", Scheme ["a", "b"] (TFun [tPair a b] b))
     , ("id", Scheme ["a"] (TFun [a] a))
     , ("const", Scheme ["a", "b"] (TFun [a] (TFun [b] a)))
     , ("apply", Scheme ["a", "b"] (TFun [TFun [a] b, a] b))
@@ -226,9 +219,7 @@ generalizeWithABC t = let
     fvord :: Type -> [String]
     fvord (TVar n) = [n]
     fvord (TFun ts t2) = nub (concatMap fvord (ts ++ [t2]))
-    fvord (TList t1) = fvord t1
-    fvord (TPair t1 t2) = nub (fvord t1 ++ fvord t2)
-    fvord _ = []
+    fvord (TApp _c ts) = nub (concatMap fvord ts)
     vars = nub $ fvord t
     repl :: Subst
     repl = M.fromList $ zip vars [ TVar [c] | c <- ['a'..'z'] ]
@@ -240,10 +231,8 @@ renderType :: Type -> String
 renderType (TVar n) = n
 renderType (TFun [t1] t2) | isSimple t1 = renderType t1 ++ " -> " ++ renderType t2
 renderType (TFun ts t1) = "(" ++ intercalate ", " (map renderType ts) ++ ") -> " ++ renderType t1
-renderType (TList t1) = "list[" ++ renderType t1 ++ "]"
-renderType (TPair t1 t2) = "pair[" ++ renderType t1 ++ ", " ++ renderType t2 ++ "]"
-renderType TInt = "int"
-renderType TBool = "bool"
+renderType (TApp c []) = c
+renderType (TApp c ts) = c ++ "[" ++ intercalate ", " (map renderType ts) ++ "]"
 
 renderScheme :: Scheme -> String
 renderScheme (Scheme vars t) = let
