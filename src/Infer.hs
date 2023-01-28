@@ -19,6 +19,7 @@ import Control.Monad (foldM)
 import Control.Monad.Trans.Maybe (MaybeT (runMaybeT))
 import Control.Monad.State.Class (MonadState(..))
 import Data.Function ((&))
+import Data.Maybe (fromMaybe)
 
 data Exp = EVar String
          | EApp Exp [Exp]
@@ -42,26 +43,25 @@ instance Types Type where
     ftv (TFun t1 t2) = ftv t1 `S.union` ftv t2
     ftv (TApp _c ts) = S.unions (map ftv ts)
 
-    apply s (TVar n) = case M.lookup n s of
-                           Nothing -> TVar n
-                           Just t -> t
+    apply (Subst m) t@(TVar n) = M.lookup n m
+                         & fromMaybe t
     apply s (TFun t1 t2) = TFun (apply s t1) (apply s t2)
     apply s (TApp c ts) = TApp c (map (apply s) ts)
 
 instance Types Scheme where
     ftv (Scheme vars t) = ftv t `S.difference` S.fromList vars
-    apply s (Scheme vars t) = Scheme vars (apply (foldr M.delete s vars) t)
+    apply (Subst m) (Scheme vars t) = Scheme vars (apply (Subst $ foldr M.delete m vars) t)
 
 instance Types a => Types [a] where
     ftv = S.unions . map ftv
     apply s = map (apply s)
     
-type Subst = M.Map String Type
-nullSubst :: Subst
-nullSubst = M.empty
+newtype Subst = Subst (M.Map String Type)
 
-composeSubst :: Subst -> Subst -> Subst
-composeSubst s1 s2 = M.union (M.map (apply s1) s2) s1
+instance Semigroup Subst where
+    s1@(Subst m1) <> (Subst m2) = Subst (M.union (M.map (apply s1) m2) m1)
+instance Monoid Subst where
+    mempty = Subst M.empty
 
 newtype TypeEnv = TypeEnv (M.Map String Scheme)
 
@@ -89,7 +89,7 @@ newTyVar prefix = do
 instantiate :: Scheme -> TI Type
 instantiate (Scheme vars t) = do
         nvars <- mapM (\v -> (v,) <$> newTyVar "a") vars
-        let s = M.fromList nvars
+        let s = Subst $ M.fromList nvars
         return $! apply s t
 
 mgu :: Type -> Type -> Maybe Subst
@@ -98,26 +98,26 @@ mgu t (TVar u) = varBind u t
 mgu (TFun l r) (TFun l' r') | length l == length l' = let
     f sub (t1, t2) = do
         s1 <- mgu (apply sub t1) (apply sub t2)
-        return $ s1 `composeSubst` sub
-    in foldM f nullSubst $ zip (r:l) (r':l')
+        return $ s1 <> sub
+    in foldM f mempty $ zip (r:l) (r':l')
 mgu (TApp c1 ts1) (TApp c2 ts2) | c1 == c2 && length ts1 == length ts2 = let
     f sub (t1, t2) = do
         s1 <- mgu (apply sub t1) (apply sub t2)
-        return $ s1 `composeSubst` sub
-    in foldM f nullSubst $ zip ts1 ts2
+        return $ s1 <> sub
+    in foldM f mempty $ zip ts1 ts2
 mgu _ _ = fail "Do not unify: t1 t2"
 
 varBind :: String -> Type -> Maybe Subst
-varBind u t | t == TVar u = return nullSubst
+varBind u t | t == TVar u = return mempty
             | u `S.member` ftv t = fail "infinite type"
-            | otherwise = return (M.singleton u t)
+            | otherwise = return $ Subst (M.singleton u t)
 
 ti :: TypeEnv -> Exp -> TI (Subst, Type)
 ti (TypeEnv env) (EVar n) = case M.lookup n env of
                                 Nothing -> fail "variable not bound"
                                 Just sigma -> do
                                     t <- instantiate sigma
-                                    return (nullSubst, t)
+                                    return (mempty, t)
 ti env (EAbs ns e) = do
         tvs <- mapM (\_ -> newTyVar "a") ns -- these are the parameter types in lambda
         let TypeEnv env' = foldl' remove env ns
@@ -125,23 +125,23 @@ ti env (EAbs ns e) = do
         (s1, t1) <- ti env'' e
         return (s1, TFun (apply s1 tvs) t1)
 ti env (EApp ef eargs) = let
-    go [] = return (nullSubst, [])
+    go [] = return (mempty, [])
     go (e:es) = do
         (s1, ts) <- go es
         (s2, t) <- ti (apply s1 env) e
-        return (s2 `composeSubst` s1, t : apply s2 ts)
+        return (s2 <> s1, t : apply s2 ts)
     in do (s1, ts) <- go eargs
           (s2, t1) <- ti (apply s1 env) ef
           tv <- newTyVar "a" -- type of the return value
           Just s3 <- return $ mgu t1 (TFun (apply s2 ts) tv)
-          return (s3 `composeSubst` s2 `composeSubst` s1, apply s3 tv)
+          return (s3 <> s2 <> s1, apply s3 tv)
 ti env (ELet x e1 e2) = do
         (s1, t1) <- ti env e1
         let TypeEnv env' = remove env x
             t' = generalize (apply s1 env) t1
             env'' = TypeEnv (M.insert x t' $ M.map (apply s1) env')
         (s2, t2) <- ti env'' e2
-        return (s2 `composeSubst` s1, t2)
+        return (s2 <> s1, t2)
 
 infer :: TypeEnv -> Exp -> Maybe Type
 infer env e = 
@@ -222,7 +222,7 @@ generalizeWithABC t = let
     fvord (TApp _c ts) = nub (concatMap fvord ts)
     vars = nub $ fvord t
     repl :: Subst
-    repl = M.fromList $ zip vars [ TVar [c] | c <- ['a'..'z'] ]
+    repl = Subst $ M.fromList $ zip vars [ TVar [c] | c <- ['a'..'z'] ]
     typ = apply repl t
     nvars = nub $ fvord typ
     in Scheme nvars typ
