@@ -1,4 +1,4 @@
-{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedStrings, TupleSections #-}
 module Infer(
     infer,
     myParse,
@@ -88,8 +88,8 @@ newTyVar prefix = do
 
 instantiate :: Scheme -> TI Type
 instantiate (Scheme vars t) = do
-        nvars <- mapM (\_ -> newTyVar "a") vars
-        let s = M.fromList (zip vars nvars)
+        nvars <- mapM (\v -> (v,) <$> newTyVar "a") vars
+        let s = M.fromList nvars
         return $! apply s t
 
 mgu :: Type -> Type -> Maybe Subst
