@@ -1,4 +1,6 @@
--- Hindley-Milner algorithm, 90% plagiarized from https://github.com/wh5a/Algorithm-W-Step-By-Step
+{-|
+Hindley-Milner algorithm, 90% plagiarized from https://github.com/wh5a/Algorithm-W-Step-By-Step
+-}
 {-# LANGUAGE OverloadedStrings, TupleSections #-}
 module Infer(
     infer,

@@ -1,7 +1,10 @@
+{-|
+Type checking for language PCF, described in chapter 19 of PFPL
+-}
 module PCF where
 
 import Data.Map (Map)
-import Data.Map qualified as M
+import qualified Data.Map as M
 
 type N = String
 
@@ -46,6 +49,8 @@ tc g (EFix t x e) = do
   t' <- tc (M.insert x t g) e
   True <- return (t == t')
   return t
+
+-- Examples
 
 plus :: Exp
 plus = EFix (TArr TNat (TArr TNat TNat)) "f"
