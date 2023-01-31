@@ -6,6 +6,9 @@ import Data.Map (Map)
 import Data.Map qualified as M
 import Data.Set (Set)
 import Data.Set qualified as S
+import System.Random (randomRIO)
+import System.IO.Unsafe (unsafePerformIO)
+import Data.Function ((&))
 
 type N = String
 
@@ -39,52 +42,65 @@ data Cmd
 
 -- Statics
 
-tcExpr :: Context -> Signature -> Exp -> Maybe T
-tcExpr g _ (EVar x) = M.lookup x g
+tcExpr :: Context -> Signature -> Exp -> Either String T
+tcExpr g _ (EVar x) = M.lookup x g & maybe (Left "var not in scope") return
 tcExpr _ _ EIntZ = pure TNat
 tcExpr g s (EIntS e) = do
-  TNat <- tcExpr g s e
+  t <- tcExpr g s e
+  grd "Succ of non-int" (t == TNat)
   return TNat
 tcExpr g s (EIfZ e0 (x, e1) e) = do
-  TNat <- tcExpr g s e
+  tnat <- tcExpr g s e
+  grd "IFZ arg must be int" (tnat == TNat)
   t0 <- tcExpr g s e0
   t1 <- tcExpr (M.insert x TNat g) s e1
-  True <- return (t0 == t1)
+  grd "Mismatch in IFZ branches" (t0 == t1)
   return t0
 tcExpr g s (EAbs x t1 e) = do
   t2 <- tcExpr (M.insert x t1 g) s e
   return (TArr t1 t2)
 tcExpr g s (EApp e1 e2) = do
   t2 <- tcExpr g s e2
-  TArr t2' t1 <- tcExpr g s e1
-  True <- return (t2 == t2')
-  return t1
+  tarr <- tcExpr g s e1
+  case tarr of
+    TArr t2' t1 -> do
+      grd "Func arg type error" (t2 == t2')
+      return t1
+    _ -> Left "Func not arrow type"
 tcExpr g s (EFix t x e) = do
   t' <- tcExpr (M.insert x t g) s e
-  True <- return (t == t')
+  grd "Fix type mismatch" (t == t')
   return t
 tcExpr g s (ECmd c) = do
-  () <- tcCmd g s c
+  tcCmd g s c
   return TCmd
 
-tcCmd :: Context -> Signature -> Cmd -> Maybe ()
+grd :: String -> Bool -> Either String ()
+grd _ True = Right ()
+grd errmsg False = Left errmsg
+
+tcCmd :: Context -> Signature -> Cmd -> Either String ()
 tcCmd g s (CRet e) = do
-  TNat <- tcExpr g s e
+  tnat <- tcExpr g s e
+  grd "Return not-int" (tnat == TNat)
   return ()
 tcCmd g s (CBnd e x m) = do
-  TCmd <- tcExpr g s e
+  tcmd <- tcExpr g s e
+  grd "Bind left side must be command" (tcmd == TCmd)
   () <- tcCmd (M.insert x TNat g) s m
   return ()
 tcCmd g s (CDcl e a m) = do
-  TNat <- tcExpr g s e
+  tnat <- tcExpr g s e
+  grd "Dcl must be int" (tnat == TNat)
   () <- tcCmd g (S.insert a s) m
   return ()
 tcCmd _ s (CGet a) = do
-  True <- return $ S.member a s
+  grd "Get variable not in scope" $ S.member a s
   return ()
 tcCmd g s (CSet a e) = do
-  True <- return $ S.member a s
-  TNat <- tcExpr g s e
+  grd "Set variable not in scope" $ S.member a s
+  tnat <- tcExpr g s e
+  grd "Set non-int" (tnat == TNat)
   return ()
 
 -- Dynamics (eager semantics)
@@ -110,7 +126,7 @@ subst x e1 e = case e of
 
 substCmd :: N -> Exp -> Cmd -> Cmd
 substCmd x e1 (CRet e) = CRet (subst x e1 e)
-substCmd x e1 c@(CBnd e y m) = if x == y then c else CBnd (subst x e1 e) y (substCmd x e1 m)
+substCmd x e1 (CBnd e y m) = CBnd (subst x e1 e) y (if x == y then m else substCmd x e1 m)
 substCmd x e1 (CDcl e a m) = CDcl (subst x e1 e) a (substCmd x e1 m)
 substCmd _ _ c@(CGet _) = c
 substCmd x e1 (CSet a e) = CSet a (subst x e1 e)
@@ -167,7 +183,8 @@ stepS (mu, CDcl e a m) | not (val e) = do
 stepS (mu, CDcl _ _ (CRet e')) | val e' = Just (mu, CRet e')
 stepS (mu, CDcl e a m) = do
   (mu', m') <- stepS (M.insert a e mu, m)
-  return (M.delete a mu', CDcl e a m')
+  let e' = mu' M.! a
+  return (M.delete a mu', CDcl e' a m')
 
 -- Example
 
@@ -188,3 +205,41 @@ sc = EIntS
 
 five :: Exp
 five = EApp (EApp plus (sc $ sc z)) (sc $ sc $ sc z)
+
+newvar :: IO String
+newvar = ("x"++).show <$> randomRIO @Int (0,10000)
+
+doo :: Exp -> Cmd
+doo e = CBnd e x (CRet (EVar x)) where
+  x = unsafePerformIO newvar
+
+ifz :: Cmd -> Cmd -> Cmd -> Cmd
+ifz cond t e = CBnd (ECmd cond) x (doo (EIfZ (ECmd t) (nz, ECmd e) (EVar x))) where
+  x = unsafePerformIO newvar
+  nz = unsafePerformIO newvar
+
+comb :: Cmd -> Cmd -> Cmd
+comb m1 m2 = CBnd (ECmd m1) x m2 where
+  x = unsafePerformIO newvar
+
+while :: Cmd -> Cmd -> Cmd
+while cond m = doo $ EFix TCmd loop (ECmd $ ifz cond (CRet EIntZ) (m `comb` doo (EVar loop))) where
+  loop = unsafePerformIO newvar
+
+pow2 :: Exp
+pow2 = EAbs "x" TNat $ ECmd $
+  CDcl (EIntS EIntZ) "r" $
+  CDcl (EVar "x") "a" $
+  (while (CGet "a") (
+    CBnd (ECmd $ CGet "r") "y" $
+    CBnd (ECmd $ CGet "a") "z" $
+    ((CSet "a" (EIfZ EIntZ ("k", EVar "k") (EVar "z"))) `comb`
+    (CSet "r" (EApp (EApp plus (EVar "y")) (EVar "y"))))
+  ) `comb` CGet "r")
+
+evalS :: Cmd -> Exp
+evalS m = go (M.empty, m) where
+  go :: State -> Exp
+  go s = case stepS s of
+    Just s' -> go s'
+    Nothing -> let (_, CRet e) = s in e

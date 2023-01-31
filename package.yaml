@@ -22,6 +22,7 @@ dependencies:
 - mtl
 - bytestring
 - attoparsec
+- random
 
 ghc-options:
 - -Wall
