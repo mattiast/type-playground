@@ -12,7 +12,6 @@ data Typ
   deriving (Eq)
 
 instance Show Typ where
-  show :: Typ -> String
   show (TVar t) = t
   show (TArr t1 t2) = "(" ++ show t1 ++ ") → " ++ show t2
   show (TAll t tau) = "∀(" ++ t ++"." ++ show tau ++ ")"

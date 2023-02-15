@@ -1,5 +1,6 @@
 -- |
 -- Type checking for "Modernized Algol" language, described in chapter 34 of PFPL
+{-# LANGUAGE TypeApplications #-}
 module MA where
 
 import Data.Map (Map)
