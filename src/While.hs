@@ -13,9 +13,10 @@ import Data.Map qualified as M
 import Data.Text (Text, unpack)
 import Data.Text.IO qualified as T (hGetContents, readFile)
 import System.IO (stdin)
-import Text.Megaparsec (MonadParsec (eof, takeWhile1P), Parsec, between, many, runParser, sepBy1)
+import Text.Megaparsec (MonadParsec (eof, takeWhile1P), Parsec, between, many, runParser, sepBy1, errorBundlePretty)
 import Text.Megaparsec.Char qualified as P
 import Text.Megaparsec.Char.Lexer qualified as L
+import Data.Void (Void)
 
 -- call L.space at the beginning of the file
 
@@ -70,42 +71,36 @@ data Stmt
 
 ---
 
-parseAOp1 :: MonadParsec e Text m => m AOp
-parseAOp1 =
-  asum
-    [ symbol "*" $> Times,
-      symbol "/" $> Div
-    ]
-
-parseAOp2 :: MonadParsec e Text m => m AOp
-parseAOp2 =
-  asum
-    [ symbol "+" $> Plus,
-      symbol "-" $> Minus
-    ]
-
 parseAExpr :: MonadParsec e Text m => m (Expr Int)
-parseAExpr = parseAExpr3
+parseAExpr = ae3 where
+  ae1 =
+    asum
+      [ EILit <$> lexeme L.decimal,
+        EVar <$> parseVar,
+        parens parseAExpr
+      ]
 
-parseAExpr1 :: MonadParsec e Text m => m (Expr Int)
-parseAExpr1 =
-  asum
-    [ EILit <$> lexeme L.decimal,
-      EVar <$> parseVar,
-      parens parseAExpr
-    ]
+  op1 =
+    asum
+      [ symbol "*" $> Times,
+        symbol "/" $> Div
+      ]
 
-parseAExpr2 :: MonadParsec e Text m => m (Expr Int)
-parseAExpr2 = do
-  x <- parseAExpr1
-  rest <- many ((,) <$> parseAOp1 <*> parseAExpr1)
-  return $ foldl' (\e1 (op, e2) -> EAOp op e1 e2) x rest
+  op2 =
+    asum
+      [ symbol "+" $> Plus,
+        symbol "-" $> Minus
+      ]
 
-parseAExpr3 :: MonadParsec e Text m => m (Expr Int)
-parseAExpr3 = do
-  x <- parseAExpr2
-  rest <- many ((,) <$> parseAOp2 <*> parseAExpr2)
-  return $ foldl' (\e1 (op, e2) -> EAOp op e1 e2) x rest
+  ae2 = do
+    x <- ae1
+    rest <- many ((,) <$> op1 <*> ae1)
+    return $ foldl' (\e1 (op, e2) -> EAOp op e1 e2) x rest
+
+  ae3 = do
+    x <- ae2
+    rest <- many ((,) <$> op2 <*> ae2)
+    return $ foldl' (\e1 (op, e2) -> EAOp op e1 e2) x rest
 
 parseBExpr :: MonadParsec e Text m => m (Expr Bool)
 parseBExpr = be3
@@ -159,10 +154,10 @@ parseStmt1 =
 test1 :: IO ()
 test1 = do
   t <- T.readFile "sample1.wh"
-  let p = mySpace *> parseStmt <* eof :: Parsec String Text Stmt
+  let p = mySpace *> parseStmt <* eof :: Parsec Void Text Stmt
       res = runParser p "sample1.wh" t
   case res of
-    Left e -> print e
+    Left e -> putStrLn $ errorBundlePretty e
     Right s -> print (execute s M.empty)
 
 test2 :: IO ()
