@@ -22,6 +22,8 @@ dependencies:
 - mtl
 - bytestring
 - attoparsec
+- megaparsec
+- text
 - random
 - unbound-generics
 
