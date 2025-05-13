@@ -2,6 +2,7 @@
 Hindley-Milner algorithm, 90% plagiarized from https://github.com/wh5a/Algorithm-W-Step-By-Step
 -}
 {-# LANGUAGE OverloadedStrings, TupleSections #-}
+{-# HLINT ignore "Use <$>" #-}
 module Infer(
     infer,
     myParse,
@@ -58,7 +59,7 @@ instance Types Scheme where
 instance Types a => Types [a] where
     ftv = S.unions . map ftv
     apply s = map (apply s)
-    
+
 newtype Subst = Subst (M.Map String Type)
 
 instance Semigroup Subst where
@@ -147,10 +148,10 @@ ti env (ELet x e1 e2) = do
         return (s2 <> s1, t2)
 
 infer :: TypeEnv -> Exp -> Maybe Type
-infer env e = 
+infer env e =
     evalState (runMaybeT $ ti env e) (TIState 0)
     & fmap snd
-              
+
 
 myEnv :: TypeEnv
 myEnv = let a = TVar "a"
