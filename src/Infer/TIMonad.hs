@@ -11,15 +11,28 @@ import Data.Map qualified as M
 import Data.Set qualified as S
 import Infer.Expr
 
-newtype TIState = TIState Int
+newtype TypeEnv = TypeEnv (M.Map String Scheme)
+
+remove :: TypeEnv -> String -> TypeEnv
+remove (TypeEnv env) var = TypeEnv (M.delete var env)
+
+instance Types TypeEnv where
+    ftv (TypeEnv env) = ftv (M.elems env)
+    apply s (TypeEnv env) = TypeEnv (M.map (apply s) env)
+data TIState = TIState
+  { nextVar :: Int
+  , subst :: Subst
+  -- , env :: TypeEnv
+  }
 
 type TI a = MaybeT (State TIState) a
 
 newTyVar :: String -> TI Type
 newTyVar prefix = do
-  (TIState i) <- get
-  put (TIState (i + 1))
-  return (TVar (prefix ++ show i))
+  st <- get
+  let v = TVar (prefix ++ show (nextVar st))
+  put $ st {nextVar = nextVar st + 1}
+  return v
 
 instantiate :: Scheme -> TI Type
 instantiate (Scheme vars t) = do

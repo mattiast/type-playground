@@ -25,14 +25,6 @@ import Data.Function ((&))
 import Infer.Expr
 import Infer.TIMonad
 
-newtype TypeEnv = TypeEnv (M.Map String Scheme)
-
-remove :: TypeEnv -> String -> TypeEnv
-remove (TypeEnv env) var = TypeEnv (M.delete var env)
-
-instance Types TypeEnv where
-    ftv (TypeEnv env) = ftv (M.elems env)
-    apply s (TypeEnv env) = TypeEnv (M.map (apply s) env)
 
 generalize :: TypeEnv -> Type -> Scheme
 generalize env t = Scheme vars t where
@@ -71,7 +63,7 @@ ti env (ELet x e1 e2) = do
 
 infer :: TypeEnv -> Exp -> Maybe Type
 infer env e =
-    evalState (runMaybeT $ ti env e) (TIState 0)
+    evalState (runMaybeT $ ti env e) (TIState 0 mempty)
     & fmap snd
 
 
