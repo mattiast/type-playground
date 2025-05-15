@@ -14,17 +14,16 @@ module Infer(
 import qualified Data.Set as S
 import qualified Data.Map as M
 import Data.List ( foldl', intercalate, nub )
-import Control.Monad.Trans.State (  State, evalState )
+import Control.Monad.Trans.State (   evalState )
 import Control.Applicative ( Alternative((<|>), many) )
 import qualified Data.Attoparsec.ByteString.Char8 as A
 import Data.Attoparsec.ByteString.Char8(Parser)
 import qualified Data.ByteString.Char8 as B
-import Control.Monad (foldM)
 import Control.Monad.Trans.Maybe (MaybeT (runMaybeT))
-import Control.Monad.State.Class (MonadState(..))
 import Data.Function ((&))
 
 import Infer.Expr
+import Infer.TIMonad
 
 newtype TypeEnv = TypeEnv (M.Map String Scheme)
 
@@ -38,42 +37,6 @@ instance Types TypeEnv where
 generalize :: TypeEnv -> Type -> Scheme
 generalize env t = Scheme vars t where
     vars = S.toList (ftv t `S.difference` ftv env)
-
-newtype TIState = TIState Int
-
-type TI a = MaybeT (State TIState) a
-
-newTyVar :: String -> TI Type
-newTyVar prefix = do
-        (TIState i) <- get
-        put (TIState (i+1))
-        return (TVar (prefix ++ show i))
-
-instantiate :: Scheme -> TI Type
-instantiate (Scheme vars t) = do
-        nvars <- mapM (\v -> (v,) <$> newTyVar "a") vars
-        let s = Subst $ M.fromList nvars
-        return $! apply s t
-
-mgu :: Type -> Type -> Maybe Subst
-mgu (TVar u) t = varBind u t
-mgu t (TVar u) = varBind u t
-mgu (TFun l r) (TFun l' r') | length l == length l' = let
-    f sub (t1, t2) = do
-        s1 <- mgu (apply sub t1) (apply sub t2)
-        return $ s1 <> sub
-    in foldM f mempty $ zip (r:l) (r':l')
-mgu (TApp c1 ts1) (TApp c2 ts2) | c1 == c2 && length ts1 == length ts2 = let
-    f sub (t1, t2) = do
-        s1 <- mgu (apply sub t1) (apply sub t2)
-        return $ s1 <> sub
-    in foldM f mempty $ zip ts1 ts2
-mgu _ _ = fail "Do not unify: t1 t2"
-
-varBind :: String -> Type -> Maybe Subst
-varBind u t | t == TVar u = return mempty
-            | u `S.member` ftv t = fail "infinite type"
-            | otherwise = return $ Subst (M.singleton u t)
 
 ti :: TypeEnv -> Exp -> TI (Subst, Type)
 ti (TypeEnv env) (EVar n) = case M.lookup n env of
