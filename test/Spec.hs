@@ -1,6 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 import Infer qualified as I
+import Infer.Expr qualified as I
 import Test.QuickCheck (Result (Success), quickCheckResult)
 import Control.Monad (forM_)
 import Data.ByteString (ByteString)
